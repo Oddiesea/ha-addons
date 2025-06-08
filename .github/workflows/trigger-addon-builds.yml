@@ -17,6 +17,7 @@ on:
 jobs:
   trigger-addons:
     runs-on: ubuntu-latest
+    environment: prod
 
     steps:
       - name: Checkout repository
