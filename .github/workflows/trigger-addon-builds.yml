@@ -1,0 +1,155 @@
+name: Trigger Add-on Builds
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      addon_name:
+        description: 'Specific add-on to build (optional - leave empty to build all dependent add-ons)'
+        required: false
+        type: string
+      version:
+        description: 'Version to build (optional - leave empty to use latest release)'
+        required: false
+        type: string
+
+jobs:
+  trigger-addons:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Find dependent add-ons
+        id: find-addons
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.addon_name }}" ]; then
+            # Manual trigger with specific add-on
+            DEPENDENT_ADDONS="${{ github.event.inputs.addon_name }}"
+            echo "Manual trigger for specific add-on: $DEPENDENT_ADDONS"
+          else
+            # Function to check if an add-on depends on this repository
+            check_addon_dependency() {
+              local addon_dir="$1"
+              local config_file="$addon_dir/config.json"
+              if [ -f "$config_file" ]; then
+                local url=$(jq -r '.url // empty' "$config_file")
+                if [ -n "$url" ]; then
+                  local repo=$(echo "$url" | sed -E 's|https?://github.com/([^/]+/[^/]+).*|\1|')
+                  if [ "$repo" = "${{ github.repository }}" ]; then
+                    echo "$(basename "$addon_dir")"
+                  fi
+                fi
+              fi
+            }
+
+            # Find all add-on directories (excluding hidden directories and files)
+            DEPENDENT_ADDONS=""
+            
+            for addon_path in */; do
+              if [ -d "$addon_path" ]; then
+                addon_name=$(basename "$addon_path")
+                # Skip common non-addon directories
+                if [[ ! "$addon_name" =~ ^(\.|_|\.github|docs|scripts)$ ]]; then
+                  dependent=$(check_addon_dependency "$addon_path")
+                  if [ -n "$dependent" ]; then
+                    if [ -z "$DEPENDENT_ADDONS" ]; then
+                      DEPENDENT_ADDONS="$dependent"
+                    else
+                      DEPENDENT_ADDONS="$DEPENDENT_ADDONS $dependent"
+                    fi
+                  fi
+                fi
+              fi
+            done
+          fi
+          
+          echo "dependent_addons=$DEPENDENT_ADDONS" >> $GITHUB_OUTPUT
+          echo "Found dependent add-ons: $DEPENDENT_ADDONS"
+
+      - name: Find target repositories
+        id: find-repos
+        run: |
+          # Create a mapping of add-ons to their target repositories
+          TARGET_REPOS=""
+          
+          for addon in ${{ steps.find-addons.outputs.dependent_addons }}; do
+            if [ -n "$addon" ] && [ -f "./$addon/config.json" ]; then
+              # Extract the image field to determine target repository
+              image=$(jq -r '.image // empty' "./$addon/config.json")
+              if [ -n "$image" ]; then
+                # Extract repository from image name (e.g., ghcr.io/oddiesea/ha-addons/dumbassets-{arch} -> oddiesea/ha-addons)
+                target_repo=$(echo "$image" | sed -E 's|^[^/]+/([^/]+/[^/]+)/.*|\1|')
+                if [ -n "$target_repo" ] && [ "$target_repo" != "$image" ]; then
+                  # Add to our list if not already present
+                  if [[ ! "$TARGET_REPOS" =~ "$target_repo" ]]; then
+                    if [ -z "$TARGET_REPOS" ]; then
+                      TARGET_REPOS="$target_repo:$addon"
+                    else
+                      TARGET_REPOS="$TARGET_REPOS $target_repo:$addon"
+                    fi
+                  else
+                    # Append addon to existing repo entry
+                    TARGET_REPOS=$(echo "$TARGET_REPOS" | sed "s|\($target_repo:[^[:space:]]*\)|\1,$addon|")
+                  fi
+                fi
+              fi
+            fi
+          done
+          
+          echo "target_repos=$TARGET_REPOS" >> $GITHUB_OUTPUT
+          echo "Target repositories and add-ons: $TARGET_REPOS"
+
+      - name: Trigger builds on target repositories
+        if: steps.find-repos.outputs.target_repos != ''
+        run: |
+          # Process each target repository
+          for repo_addon_pair in ${{ steps.find-repos.outputs.target_repos }}; do
+            if [ -n "$repo_addon_pair" ]; then
+              # Split repository and add-ons
+              target_repo=$(echo "$repo_addon_pair" | cut -d':' -f1)
+              addons=$(echo "$repo_addon_pair" | cut -d':' -f2)
+              
+              echo "Triggering build on repository: $target_repo for add-ons: $addons"
+              
+              # Split multiple add-ons and trigger for each
+              IFS=',' read -ra ADDON_ARRAY <<< "$addons"
+              for addon in "${ADDON_ARRAY[@]}"; do
+                if [ -n "$addon" ]; then
+                  echo "  - Triggering build for add-on: $addon"
+                  
+                  # Determine version to use
+                  if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+                    version="${{ github.event.inputs.version }}"
+                  else
+                    version="${{ github.event.release.tag_name }}"
+                  fi
+                  
+                  # Trigger the repository_dispatch event on the target repository
+                  response=$(curl -s -w "%{http_code}" -X POST \
+                    -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                    -H "Accept: application/vnd.github.v3+json" \
+                    -H "Content-Type: application/json" \
+                    "https://api.github.com/repos/$target_repo/dispatches" \
+                    -d '{
+                      "event_type": "addon_release",
+                      "client_payload": {
+                        "addon": "'"$addon"'",
+                        "version": "'"$version"'",
+                        "source_repo": "${{ github.repository }}",
+                        "trigger_repo": "'"$target_repo"'"
+                      }
+                    }')
+                  
+                  http_code=$(echo "$response" | tail -c 4)
+                  if [ "$http_code" = "204" ]; then
+                    echo "    ✓ Successfully triggered build for $addon on $target_repo"
+                  else
+                    echo "    ✗ Failed to trigger build for $addon on $target_repo (HTTP: $http_code)"
+                    echo "    Response: $(echo "$response" | head -c -4)"
+                  fi
+                fi
+              done
+            fi
+          done

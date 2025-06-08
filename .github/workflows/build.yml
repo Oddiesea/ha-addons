@@ -1,0 +1,220 @@
+name: Build and Push Add-ons
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**/config.json'
+      - '.github/workflows/build.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**/config.json'
+      - '.github/workflows/build.yml'
+  repository_dispatch:
+    types: [addon_release]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, aarch64]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Podman
+        uses: redhat-actions/buildah-setup@v2
+        with:
+          podman-version: latest
+
+      - name: Login to GitHub Container Registry
+        uses: redhat-actions/podman-login@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Find changed add-ons
+        id: changed-addons
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            # For repository_dispatch, build the specific addon from the payload
+            CHANGED_ADDONS="${{ github.event.client_payload.addon }}"
+            echo "Building specific add-on from dispatch: $CHANGED_ADDONS"
+          else
+            # For push/PR events, find changed add-ons
+            if [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+              CHANGED_ADDONS=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -o '^[^/]*' | sort -u | tr '\n' ' ')
+            else
+              # For initial commits or when before is not available, check all addon directories
+              CHANGED_ADDONS=$(find . -maxdepth 1 -type d -name "*" ! -name "." ! -name ".git" ! -name ".github" -printf "%f " 2>/dev/null || ls -d */ 2>/dev/null | sed 's|/||g' | tr '\n' ' ')
+            fi
+            echo "Found changed add-ons: $CHANGED_ADDONS"
+          fi
+          echo "changed_addons=$CHANGED_ADDONS" >> $GITHUB_OUTPUT
+
+      - name: Process each add-on
+        id: process-addons
+        run: |
+          # Function to extract repository info from config.json
+          get_repo_info() {
+            local addon_dir="$1"
+            local config_file="$addon_dir/config.json"
+            if [ -f "$config_file" ]; then
+              # Extract URL and convert to repo format (e.g., https://github.com/user/repo -> user/repo)
+              local url=$(jq -r '.url // empty' "$config_file")
+              local image=$(jq -r '.image // empty' "$config_file")
+              local name=$(jq -r '.name // empty' "$config_file")
+              
+              if [ -n "$url" ] && [ -n "$image" ]; then
+                local repo=$(echo "$url" | sed -E 's|https?://github.com/([^/]+/[^/]+).*|\1|')
+                echo "{\"addon\":\"$addon_dir\",\"name\":\"$name\",\"repo\":\"$repo\",\"image\":\"$image\"}"
+              fi
+            fi
+          }
+
+          # Process each changed add-on
+          echo "[]" > addons.json
+          addons_array="["
+          first=true
+          
+          for addon in ${{ steps.changed-addons.outputs.changed_addons }}; do
+            addon=$(echo "$addon" | tr -d ' ')  # Remove whitespace
+            if [ -n "$addon" ] && [ -d "$addon" ]; then
+              echo "Processing add-on directory: $addon"
+              info=$(get_repo_info "$addon")
+              if [ -n "$info" ]; then
+                if [ "$first" = true ]; then
+                  first=false
+                  addons_array="${addons_array}${info}"
+                else
+                  addons_array="${addons_array},${info}"
+                fi
+              else
+                echo "Warning: Could not get info for add-on $addon"
+              fi
+            elif [ -n "$addon" ]; then
+              echo "Warning: Directory $addon does not exist"
+            fi
+          done
+          
+          addons_array="${addons_array}]"
+          echo "$addons_array" > addons.json
+          echo "Generated addons.json:"
+          cat addons.json
+
+      - name: Get version for each add-on
+        id: versions
+        run: |
+          # Initialize versions.json
+          echo "[]" > versions.json
+          versions_array="["
+          first=true
+          
+          # Check if addons.json has content
+          if [ ! -f "addons.json" ] || [ "$(cat addons.json)" = "[]" ]; then
+            echo "No add-ons to process"
+            exit 0
+          fi
+          
+          while IFS= read -r addon_info; do
+            if [ -n "$addon_info" ]; then
+              addon=$(echo "$addon_info" | jq -r '.addon')
+              repo=$(echo "$addon_info" | jq -r '.repo')
+              
+              echo "Getting version for add-on: $addon (repo: $repo)"
+              
+              if [ "${{ github.event_name }}" = "repository_dispatch" ] && [ "${{ github.event.client_payload.addon }}" = "$addon" ]; then
+                version="${{ github.event.client_payload.version }}"
+                echo "Using version from dispatch payload: $version"
+              else
+                echo "Fetching latest release for $repo"
+                version=$(curl -s "https://api.github.com/repos/${repo}/releases/latest" | jq -r '.tag_name // "latest"')
+                if [ "$version" = "null" ] || [ -z "$version" ]; then
+                  version="latest"
+                fi
+                echo "Fetched version: $version"
+              fi
+              
+              versioned_info=$(echo "$addon_info" | jq --arg v "$version" '. + {"version": $v}')
+              
+              if [ "$first" = true ]; then
+                first=false
+                versions_array="${versions_array}${versioned_info}"
+              else
+                versions_array="${versions_array},${versioned_info}"
+              fi
+            fi
+          done < <(jq -c '.[]' addons.json 2>/dev/null | grep -v '^$')
+          
+          versions_array="${versions_array}]"
+          echo "$versions_array" > versions.json
+          echo "Generated versions.json:"
+          cat versions.json
+
+      - name: Build and push
+        run: |
+          # Check if versions.json has content
+          if [ ! -f "versions.json" ] || [ "$(cat versions.json)" = "[]" ]; then
+            echo "No add-ons to build"
+            exit 0
+          fi
+          
+          while IFS= read -r addon_info; do
+            if [ -n "$addon_info" ]; then
+              addon=$(echo "$addon_info" | jq -r '.addon')
+              repo=$(echo "$addon_info" | jq -r '.repo')
+              image_template=$(echo "$addon_info" | jq -r '.image')
+              version=$(echo "$addon_info" | jq -r '.version')
+              name=$(echo "$addon_info" | jq -r '.name')
+              
+              echo "Building add-on: $name ($addon)"
+              echo "  Repository: $repo"
+              echo "  Version: $version"
+              echo "  Architecture: ${{ matrix.arch }}"
+              
+              # Replace {arch} and {repository} in image template
+              image_name=$(echo "$image_template" | sed "s/{arch}/${{ matrix.arch }}/g" | sed "s/{repository}/${{ github.repository }}/g")
+              echo "  Image: $image_name"
+              
+              # Check if addon directory exists and has a Dockerfile
+              if [ ! -d "$addon" ]; then
+                echo "  Error: Add-on directory $addon does not exist"
+                continue
+              fi
+              
+              if [ ! -f "$addon/Dockerfile" ]; then
+                echo "  Error: No Dockerfile found in $addon/"
+                continue
+              fi
+              
+              # Build the image
+              echo "  Building image..."
+              podman build \
+                --platform linux/${{ matrix.arch }} \
+                --build-arg BUILD_FROM=homeassistant/${{ matrix.arch }}-base:latest \
+                --build-arg SOURCE_VERSION="$version" \
+                --build-arg SOURCE_REPO="$repo" \
+                -t "${image_name}:latest" \
+                -t "${image_name}:${version}" \
+                "./$addon" || {
+                echo "  Error: Failed to build image for $addon"
+                continue
+              }
+              
+              # Push the image (skip for pull requests)
+              if [ "${{ github.event_name }}" != "pull_request" ]; then
+                echo "  Pushing images..."
+                podman push "${image_name}:latest" || echo "  Warning: Failed to push latest tag"
+                podman push "${image_name}:${version}" || echo "  Warning: Failed to push version tag"
+                echo "  ✓ Successfully built and pushed $addon"
+              else
+                echo "  ✓ Successfully built $addon (push skipped for PR)"
+              fi
+            fi
+          done < <(jq -c '.[]' versions.json 2>/dev/null | grep -v '^$')
