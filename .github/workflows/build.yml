@@ -27,11 +27,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Set up Podman
-        uses: redhat-actions/setup-podman@v1
-        with:
-          version: latest
-
       - uses: redhat-actions/podman-login@v1
         with:
           registry: ghcr.io
