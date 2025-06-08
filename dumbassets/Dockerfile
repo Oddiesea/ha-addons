@@ -45,16 +45,14 @@ RUN set -eux; \
       rm -f source.tar.gz; \
     done
 
-# Install dependencies and nexe
+# Install dependencies and build tools
 RUN npm i --omit=dev && \
-    npm install -g nexe
+    npm install @vercel/ncc
 
 # Build the binary
-RUN if [ "${TARGETARCH}" = "amd64" ]; then \
-      nexe server.js -o dumbassets --target "linux-x64-20.5.1"; \
-    elif [ "${TARGETARCH}" = "arm64" ]; then \
-      nexe server.js -o dumbassets --target "linux-arm64-20.5.1"; \
-    fi && \
+RUN npx ncc build server.js -o dist && \
+    echo '#!/usr/bin/env node' > dumbassets && \
+    cat dist/index.js >> dumbassets && \
     chmod +x dumbassets && \
     file dumbassets
 
