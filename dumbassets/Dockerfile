@@ -43,16 +43,14 @@ RUN set -eux; \
     tar -xzf source.tar.gz --strip-components=1; \
     rm source.tar.gz
 
-# Install dependencies
-RUN npm ci --omit=dev
-
-# Install pkg and compile
-RUN npm install -g pkg
+# Install dependencies and pkg
+RUN npm ci --omit=dev && \
+    npm install pkg
 
 RUN ARCH_TARGET="node20-linux-x64"; \
     [ "${TARGETARCH}" = "arm64" ] && ARCH_TARGET="node20-linux-arm64"; \
     [ "${TARGETARCH}" = "arm" ] && ARCH_TARGET="node20-linux-armv7"; \
-    pkg server.js --targets $ARCH_TARGET --output dumbassets && \
+    ./node_modules/.bin/pkg server.js --targets $ARCH_TARGET --output dumbassets && \
     chmod +x dumbassets && \
     file dumbassets
 
