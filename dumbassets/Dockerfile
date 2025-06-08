@@ -9,29 +9,22 @@ ARG TARGETARCH
 ARG SOURCE_REPO
 ARG SOURCE_VERSION
 
-# Install dependencies based on architecture
-RUN if [ "$TARGETARCH" = "amd64" ]; then \
-        apt-get update && apt-get install -y \
-        curl \
-        ca-certificates \
-        unzip \
-        file \
-        python3 \
-        make \
-        g++ \
-        git \
-        && rm -rf /var/lib/apt/lists/*; \
-    else \
-        apk add --no-cache \
-        curl \
-        ca-certificates \
-        unzip \
-        file \
-        python3 \
-        make \
-        g++ \
-        git; \
-    fi
+# Install Nix
+RUN sh <(curl -L https://nixos.org/nix/install) --no-daemon
+
+# Add Nix to PATH
+ENV PATH="/root/.nix-profile/bin:${PATH}"
+
+# Install dependencies using Nix
+RUN nix-env -iA \
+    nixpkgs.curl \
+    nixpkgs.cacert \
+    nixpkgs.unzip \
+    nixpkgs.file \
+    nixpkgs.python3 \
+    nixpkgs.gnumake \
+    nixpkgs.gcc \
+    nixpkgs.git
 
 WORKDIR /app
 
