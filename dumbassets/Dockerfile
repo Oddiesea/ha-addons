@@ -45,26 +45,19 @@ RUN set -eux; \
       rm -f source.tar.gz; \
     done
 
-# Install dependencies and build tools
+# Install dependencies and pkg
 RUN npm i --omit=dev && \
-    npm install esbuild
+    npm install pkg@5.8.1
 
 # Create a build script
-RUN echo 'const { build } = require("esbuild"); \
-    const target = process.env.TARGETARCH === "arm64" ? "node20" : "node20"; \
-    build({ \
-      entryPoints: ["server.js"], \
-      bundle: true, \
-      platform: "node", \
-      target: target, \
-      outfile: "dumbassets", \
-      format: "cjs", \
-      minify: true, \
-      sourcemap: false, \
-      banner: { \
-        js: "#!/usr/bin/env node\n", \
-      }, \
-    }).catch(() => process.exit(1));' > build.js
+RUN echo 'const { execSync } = require("child_process"); \
+    const target = process.env.TARGETARCH === "arm64" ? "node18-linux-arm64" : "node18-linux-x64"; \
+    try { \
+      execSync(`./node_modules/.bin/pkg server.js --targets ${target} --output dumbassets --public --public-packages "*" --no-bytecode --no-native-addons`, { stdio: "inherit" }); \
+    } catch (error) { \
+      console.error("Build failed:", error); \
+      process.exit(1); \
+    }' > build.js
 
 # Build the binary
 RUN TARGETARCH=${TARGETARCH} node build.js && \
