@@ -142,7 +142,7 @@ RUN if [ ! -f source.tar.gz ]; then \
     ls -la
 
 # Install and build using bun or npm
-COPY app/ .
+# Note: Files are already extracted from the tarball, no need to copy app/
 RUN if command -v bun >/dev/null 2>&1; then \
         echo "Using Bun for build" && \
         bun install --production && \
