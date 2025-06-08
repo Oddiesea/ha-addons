@@ -7,13 +7,14 @@ FROM ${BUILD_FROM}
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Setup base
-RUN \
-    apk add --no-cache \
-        nodejs \
-        npm \
-        curl \
-        jq \
-        tar
+RUN apt-get update && apt-get install -y \
+    nodejs \
+    npm \
+    curl \
+    jq \
+    tar \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
 
 # Copy root filesystem
 COPY rootfs /
