@@ -6,11 +6,11 @@ on:
   workflow_dispatch:
     inputs:
       addon_name:
-        description: 'Specific add-on to build (optional - leave empty to build all dependent add-ons)'
+        description: "Specific add-on to build (optional - leave empty to build all dependent add-ons)"
         required: false
         type: string
       version:
-        description: 'Version to build (optional - leave empty to use latest release)'
+        description: "Version to build (optional - leave empty to use latest release)"
         required: false
         type: string
 
@@ -76,7 +76,7 @@ jobs:
         id: find-repos
         run: |
           TARGET_REPOS=""
-          
+
           for addon in $DEPENDENT_ADDONS; do
             if [ -n "$addon" ] && [ -f "./$addon/config.json" ]; then
               image=$(jq -r '.image // empty' "./$addon/config.json")
@@ -96,7 +96,7 @@ jobs:
               fi
             fi
           done
-          
+
           echo "target_repos=$TARGET_REPOS" >> $GITHUB_OUTPUT
           echo "TARGET_REPOS=$TARGET_REPOS" >> $GITHUB_ENV
           echo "Target repositories and add-ons: $TARGET_REPOS"
@@ -118,7 +118,7 @@ jobs:
               if [ -n "$addon" ]; then
                 echo "  - Triggering build for add-on: $addon"
                 response=$(curl -s -w "%{http_code}" -X POST \
-                  -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                  -H "Authorization: token ${{ secrets.GH_PAT }}" \
                   -H "Accept: application/vnd.github.v3+json" \
                   -H "Content-Type: application/json" \
                   "https://api.github.com/repos/$target_repo/dispatches" \
