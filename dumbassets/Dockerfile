@@ -23,7 +23,11 @@ RUN nix-env -iA \
     nixpkgs.python3 \
     nixpkgs.gnumake \
     nixpkgs.gcc \
-    nixpkgs.git
+    nixpkgs.git \
+    nixpkgs.nodejs_20
+
+# Add node_modules/.bin to PATH
+ENV PATH="/root/.nix-profile/bin:${PATH}"
 
 WORKDIR /app
 
