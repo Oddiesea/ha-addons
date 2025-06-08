@@ -37,11 +37,13 @@ RUN set -eux; \
     for v in $version_variants; do \
       url="https://github.com/${SOURCE_REPO}/archive/refs/tags/${v}.tar.gz"; \
       echo "Trying $url"; \
-      curl -sSL "$url" -o source.tar.gz && \
-      file source.tar.gz | grep -q 'gzip compressed' && break || true; \
-    done; \
-    tar -xzf source.tar.gz --strip-components=1; \
-    rm source.tar.gz
+      if curl -sSL "$url" -o source.tar.gz && file source.tar.gz | grep -q 'gzip compressed'; then \
+        tar -xzf source.tar.gz --strip-components=1; \
+        rm source.tar.gz; \
+        break; \
+      fi; \
+      rm -f source.tar.gz; \
+    done
 
 # Install dependencies and pkg
 RUN npm ci --omit=dev && \
