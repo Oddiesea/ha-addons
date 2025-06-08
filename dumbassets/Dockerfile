@@ -1,10 +1,25 @@
 # Build args declared at the top level
 ARG BUILD_FROM
+ARG SOURCE_REPO
+ARG SOURCE_VERSION
 
-# Actual builder stage
+# Builder stage
 FROM oven/bun:slim as builder
 
+# Install required packages
+RUN apt-get update && apt-get install -y curl jq && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
+
+# Download the release tarball
+RUN curl -s "https://api.github.com/repos/${SOURCE_REPO}/releases" | \
+    jq -r --arg version ${SOURCE_VERSION} '.[] | select(.tag_name == $version) | .tarball_url' | \
+    xargs -I {} curl -L -o source.tar.gz {}
+
+# Extract the tarball
+RUN tar -xzvf source.tar.gz --strip-components=1 && rm source.tar.gz
+
+# Install and build using bun
 COPY app/ .
 RUN bun install --production && \
     bun build server.js --compile --outfile dumbassets
