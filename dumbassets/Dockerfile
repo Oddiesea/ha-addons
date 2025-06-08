@@ -1,46 +1,41 @@
-# Stage 1: Build with Bun
+# Build args declared at the top level
+ARG BUILD_FROM
+
+# Actual builder stage
 FROM oven/bun:slim as builder
 
 WORKDIR /app
-COPY . .
-
-# Install dependencies & build native binary
+COPY app/ .
 RUN bun install --production && \
-    bun build src/index.ts --compile --outfile dumbassets
+    bun build server.js --compile --outfile dumbassets
 
-
-# Build Final Image
-ARG BUILD_FROM
+# Runtime stage using dynamic base image
 FROM ${BUILD_FROM}
 
-# Build arguments
+# Re-declare all ARGs for this stage
+ARG BUILD_FROM
 ARG SOURCE_VERSION
 ARG SOURCE_REPO
 ARG ADDON_ARCH
 
-# Optional labels
+# Labels
 LABEL org.opencontainers.image.source="${SOURCE_REPO}"
 LABEL org.opencontainers.image.version="${SOURCE_VERSION}"
 LABEL org.opencontainers.image.architecture="${ADDON_ARCH}"
 
-# Optional: make available in container
+# Environment variables
 ENV ADDON_VERSION=${SOURCE_VERSION}
 ENV ADDON_ARCH=${ADDON_ARCH}
 ENV ADDON_REPO=${SOURCE_REPO}
-
-# Example build steps
-RUN echo "Building for $ADDON_ARCH version $ADDON_VERSION from $ADDON_REPO"
-
-# Environment setup
-ENV LANG C.UTF-8
+ENV LANG=C.UTF-8
 ENV PORT=3000
 
-# Copy precompiled binary and runtime files
+# Copy files
 COPY --from=builder /app/dumbassets /app/dumbassets
-COPY rootfs/ /
+COPY rootfs/app .
 
-# Make the binary executable
-RUN chmod +x /app/dumbassets
+# Set permissions
+RUN chmod +x /app/dumbassets && chmod +x /run.sh
 
-# Run the compiled app via startup script
-CMD [ "/run.sh" ]
+# Default command
+CMD ["/run.sh"]
