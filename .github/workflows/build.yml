@@ -173,8 +173,8 @@ jobs:
               echo "  Architecture: ${{ matrix.arch }}"
               
               # Replace {arch} and {repository} in image template
-              image_name=$(echo "$image_template" | sed "s/{arch}/${{ matrix.arch }}/g" | sed "s/{repository}/${{ github.repository }}/g")
-              echo "  Image: $image_name"
+              image_name="${image_template//\{arch\}/${{ matrix.arch }}}"
+              image_name="${image_name//\{repository\}/${{ github.repository }}}"
               
               # Check if addon directory exists and has a Dockerfile
               if [ ! -d "$addon" ]; then
