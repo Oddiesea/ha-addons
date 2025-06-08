@@ -11,7 +11,7 @@ ARG BUILDPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
 
-# Install required packages (including 'file' command)
+# Install required packages
 RUN apt-get update && apt-get install -y \
     curl \
     jq \
@@ -25,140 +25,163 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Ensure environment variables are set
+# Install zx and other tools
+RUN npm install -g zx bun
+
+# Create download script
+RUN cat > download.mjs << 'EOF'
+#!/usr/bin/env zx
+
+const { SOURCE_REPO, SOURCE_VERSION } = process.env;
+
+if (!SOURCE_REPO || !SOURCE_VERSION) {
+  throw new Error('SOURCE_REPO and SOURCE_VERSION must be set');
+}
+
+console.log(`Downloading ${SOURCE_REPO} version ${SOURCE_VERSION}`);
+
+async function downloadRelease() {
+  try {
+    // Method 1: Try GitHub API
+    console.log('Trying GitHub API...');
+    const releases = await fetch(`https://api.github.com/repos/${SOURCE_REPO}/releases`).then(r => r.json());
+    
+    // Try different version formats
+    const versionVariants = [
+      SOURCE_VERSION,
+      `v${SOURCE_VERSION}`,
+      SOURCE_VERSION.replace(/^v/, '')
+    ];
+    
+    let tarballUrl = null;
+    for (const version of versionVariants) {
+      const release = releases.find(r => r.tag_name === version);
+      if (release) {
+        tarballUrl = release.tarball_url;
+        console.log(`Found via API: ${tarballUrl}`);
+        break;
+      }
+    }
+    
+    if (tarballUrl) {
+      await $`curl -L -o source.tar.gz ${tarballUrl}`;
+      if (await isValidGzip()) return true;
+    }
+    
+    // Method 2: Try direct GitHub URLs
+    console.log('Trying direct GitHub URLs...');
+    const directUrls = versionVariants.map(v => 
+      `https://github.com/${SOURCE_REPO}/archive/refs/tags/${v}.tar.gz`
+    );
+    
+    for (const url of directUrls) {
+      try {
+        console.log(`Attempting: ${url}`);
+        await $`curl -L -o source.tar.gz ${url}`;
+        if (await isValidGzip()) return true;
+      } catch (e) {
+        console.log(`Failed: ${url}`);
+      }
+    }
+    
+    // Method 3: List available releases and exit
+    console.log('All methods failed. Available releases:');
+    releases.slice(0, 10).forEach(r => console.log(r.tag_name));
+    console.log(`Requested version: ${SOURCE_VERSION}`);
+    process.exit(1);
+    
+  } catch (error) {
+    console.error('Download failed:', error.message);
+    process.exit(1);
+  }
+}
+
+async function isValidGzip() {
+  try {
+    const result = await $`file source.tar.gz`;
+    return result.stdout.includes('gzip compressed');
+  } catch {
+    return false;
+  }
+}
+
+await downloadRelease();
+
+// Verify and show file info
+await $`ls -lh source.tar.gz`;
+await $`file source.tar.gz`;
+EOF
+
+# Create build script
+RUN cat > build.mjs << 'EOF'
+#!/usr/bin/env zx
+
+const { TARGETARCH, TARGETOS } = process.env;
+
+console.log(`Building for architecture: ${TARGETARCH} on platform: ${process.env.BUILDPLATFORM}`);
+console.log(`Target OS: ${TARGETOS}, Target Arch: ${TARGETARCH}`);
+
+// Check if source.tar.gz exists and extract
+if (!fs.existsSync('source.tar.gz')) {
+  console.error('Error: source.tar.gz not found!');
+  await $`ls -la`;
+  process.exit(1);
+}
+
+console.log('Extracting tarball...');
+await $`tar -xzvf source.tar.gz --strip-components=1`;
+await $`rm source.tar.gz`;
+console.log('Extraction complete. Contents:');
+await $`ls -la`;
+
+// Build the application
+const hasBun = await which('bun').then(() => true).catch(() => false);
+
+if (hasBun) {
+  console.log('Using Bun for build');
+  await $`bun install --production`;
+  
+  const targets = {
+    amd64: 'bun-linux-x64',
+    arm64: 'bun-linux-arm64',
+    arm: 'bun-linux-arm'
+  };
+  
+  const target = targets[TARGETARCH];
+  if (target) {
+    await $`bun build server.js --compile --target=${target} --outfile dumbassets`;
+  } else {
+    console.log(`Unknown architecture ${TARGETARCH}, using generic build`);
+    await $`bun build server.js --compile --outfile dumbassets`;
+  }
+} else {
+  console.log('Using Node.js with pkg for build');
+  await $`npm ci --production`;
+  await $`npm install -g pkg`;
+  
+  const targets = {
+    amd64: 'node18-linux-x64',
+    arm64: 'node18-linux-arm64',
+    arm: 'node18-linux-armv7'
+  };
+  
+  const target = targets[TARGETARCH] || 'node18-linux-x64';
+  console.log(`Using pkg target: ${target}`);
+  await $`npx pkg server.js --targets ${target} --output dumbassets`;
+}
+
+await $`chmod +x dumbassets`;
+console.log('Build complete. File info:');
+await $`ls -la dumbassets`;
+await $`file dumbassets`;
+EOF
+
+# Execute the scripts
 ARG SOURCE_REPO
 ARG SOURCE_VERSION
-RUN : "${SOURCE_REPO:?SOURCE_REPO is not set}" \
-    && : "${SOURCE_VERSION:?SOURCE_VERSION is not set}"
-
-# Install Bun via npm for better cross-platform support
-RUN echo "Installing Bun for ${TARGETARCH}..." && \
-    npm install -g bun || \
-    (echo "Bun installation failed, will use Node.js fallback" && \
-     npm install -g pkg)
-
-# Download the release tarball with improved version handling and fallback methods
-RUN echo "Attempting to download ${SOURCE_REPO} version ${SOURCE_VERSION}" && \
-    # Method 1: Try API approach first with both version formats
-    (curl -s "https://api.github.com/repos/${SOURCE_REPO}/releases" > releases.json && \
-     # Try exact version match first
-     TARBALL_URL=$(cat releases.json | jq -r --arg version "${SOURCE_VERSION}" '.[] | select(.tag_name == $version) | .tarball_url') && \
-     # If not found, try with 'v' prefix
-     if [ -z "${TARBALL_URL}" ] || [ "${TARBALL_URL}" = "null" ]; then \
-         TARBALL_URL=$(cat releases.json | jq -r --arg version "v${SOURCE_VERSION}" '.[] | select(.tag_name == $version) | .tarball_url'); \
-     fi && \
-     # If not found, try without 'v' prefix (in case SOURCE_VERSION has 'v')
-     if [ -z "${TARBALL_URL}" ] || [ "${TARBALL_URL}" = "null" ]; then \
-         VERSION_NO_V=$(echo "${SOURCE_VERSION}" | sed 's/^v//') && \
-         TARBALL_URL=$(cat releases.json | jq -r --arg version "${VERSION_NO_V}" '.[] | select(.tag_name == $version) | .tarball_url'); \
-     fi && \
-     if [ -n "${TARBALL_URL}" ] && [ "${TARBALL_URL}" != "null" ]; then \
-         echo "Found via API: ${TARBALL_URL}" && \
-         curl -L -o source.tar.gz "${TARBALL_URL}" && \
-         # Verify it's a valid gzip file
-         if file source.tar.gz | grep -q "gzip compressed"; then \
-             echo "API download successful"; \
-         else \
-             echo "API downloaded invalid file" && \
-             rm -f source.tar.gz && \
-             false; \
-         fi; \
-     else \
-         echo "API method failed or version not found"; \
-         false; \
-     fi) || \
-    # Method 2: Try direct GitHub tarball URL with version formats
-    (echo "Trying direct GitHub URL methods..." && \
-     # Try with original version
-     DIRECT_URL="https://github.com/${SOURCE_REPO}/archive/refs/tags/${SOURCE_VERSION}.tar.gz" && \
-     echo "Attempting: ${DIRECT_URL}" && \
-     (curl -L -o source.tar.gz "${DIRECT_URL}" && \
-      if file source.tar.gz | grep -q "gzip compressed"; then \
-          echo "Successfully downloaded via direct URL (original version)"; \
-      else \
-          echo "Direct URL (original) returned invalid file" && \
-          rm -f source.tar.gz && \
-          false; \
-      fi) || \
-     # Try with 'v' prefix
-     (echo "Trying with 'v' prefix..." && \
-      DIRECT_URL_V="https://github.com/${SOURCE_REPO}/archive/refs/tags/v${SOURCE_VERSION}.tar.gz" && \
-      echo "Attempting: ${DIRECT_URL_V}" && \
-      curl -L -o source.tar.gz "${DIRECT_URL_V}" && \
-      if file source.tar.gz | grep -q "gzip compressed"; then \
-          echo "Successfully downloaded via direct URL (with v prefix)"; \
-      else \
-          echo "Direct URL (with v) returned invalid file" && \
-          rm -f source.tar.gz && \
-          false; \
-      fi) || \
-     # Try without 'v' prefix if source version had it
-     (if echo "${SOURCE_VERSION}" | grep -q "^v"; then \
-          VERSION_NO_V=$(echo "${SOURCE_VERSION}" | sed 's/^v//') && \
-          echo "Trying without 'v' prefix: ${VERSION_NO_V}" && \
-          DIRECT_URL_NO_V="https://github.com/${SOURCE_REPO}/archive/refs/tags/${VERSION_NO_V}.tar.gz" && \
-          echo "Attempting: ${DIRECT_URL_NO_V}" && \
-          curl -L -o source.tar.gz "${DIRECT_URL_NO_V}" && \
-          if file source.tar.gz | grep -q "gzip compressed"; then \
-              echo "Successfully downloaded via direct URL (without v prefix)"; \
-          else \
-              echo "Direct URL (without v) returned invalid file" && \
-              rm -f source.tar.gz && \
-              false; \
-          fi; \
-      else \
-          false; \
-      fi)) || \
-    # Method 3: List available releases and exit with error
-    (echo "All download methods failed. Available releases:" && \
-     if [ -f releases.json ]; then \
-         cat releases.json | jq -r '.[].tag_name' | head -10; \
-     else \
-         curl -s "https://api.github.com/repos/${SOURCE_REPO}/releases" | jq -r '.[].tag_name' | head -10; \
-     fi && \
-     echo "Requested version: ${SOURCE_VERSION}" && \
-     exit 1) && \
-    # Verify file was downloaded and is valid
-    if [ ! -f source.tar.gz ]; then \
-        echo "Error: source.tar.gz was not created!" && \
-        exit 1; \
-    fi && \
-    echo "Download successful. File size:" && \
-    ls -lh source.tar.gz && \
-    echo "File type:" && \
-    file source.tar.gz && \
-    rm -f releases.json
-
-# Extract the tarball
-RUN if [ ! -f source.tar.gz ]; then \
-        echo "Error: source.tar.gz not found!" && \
-        ls -la && \
-        exit 1; \
-    fi && \
-    echo "Extracting tarball..." && \
-    tar -xzvf source.tar.gz --strip-components=1 && \
-    rm source.tar.gz && \
-    echo "Extraction complete. Contents:" && \
-    ls -la
-
-# Install and build using bun or npm
-# Note: Files are already extracted from the tarball, no need to copy app/
-RUN if command -v bun >/dev/null 2>&1; then \
-        echo "Using Bun for build" && \
-        bun install --production && \
-        bun build server.js --compile --outfile dumbassets; \
-    else \
-        echo "Using Node.js for build" && \
-        npm ci --production && \
-        if command -v pkg >/dev/null 2>&1; then \
-            npx pkg server.js --targets node18-linux-${TARGETARCH} --output dumbassets; \
-        else \
-            echo "Building without compilation" && \
-            echo '#!/usr/bin/env node' > dumbassets && \
-            cat server.js >> dumbassets; \
-        fi; \
-    fi && \
-    chmod +x dumbassets
+RUN chmod +x download.mjs build.mjs && \
+    zx download.mjs && \
+    zx build.mjs
 
 # Runtime stage using dynamic base image
 FROM ${BUILD_FROM}
@@ -186,8 +209,12 @@ ENV PORT=3000
 COPY --from=builder /app/dumbassets /app/dumbassets
 COPY rootfs/app .
 
-# Set permissions
-RUN chmod +x /app/dumbassets && chmod +x /run.sh
+# Set permissions and verify binary
+RUN chmod +x /app/dumbassets && \
+    if [ -f /run.sh ]; then chmod +x /run.sh; fi && \
+    echo "Binary info:" && \
+    ls -la /app/dumbassets && \
+    file /app/dumbassets || echo "file command not available"
 
 # Default command
 CMD ["/run.sh"]
