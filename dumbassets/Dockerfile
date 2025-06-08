@@ -46,19 +46,28 @@ RUN set -eux; \
     done
 
 # Install dependencies and pkg
-RUN npm ci --omit=dev && \
+RUN npm i --omit=dev && \
     npm install pkg
+
+# Pre-download Node.js binaries for pkg
+RUN mkdir -p /root/.pkg-cache && \
+    if [ "${TARGETARCH}" = "amd64" ]; then \
+      curl -sSL https://github.com/vercel/pkg-fetch/releases/download/v3.4/node-v20.5.1-linux-x64 -o /root/.pkg-cache/v3.4-fetched-v20.5.1-linux-x64; \
+    elif [ "${TARGETARCH}" = "arm64" ]; then \
+      curl -sSL https://github.com/vercel/pkg-fetch/releases/download/v3.4/node-v20.5.1-linux-arm64 -o /root/.pkg-cache/v3.4-fetched-v20.5.1-linux-arm64; \
+    fi
 
 # Set up pkg compilation
 RUN ARCH_TARGET="node20-linux-x64"; \
     [ "${TARGETARCH}" = "arm64" ] && ARCH_TARGET="node20-linux-arm64"; \
     [ "${TARGETARCH}" = "arm" ] && ARCH_TARGET="node20-linux-armv7"; \
-    NODE_OPTIONS="--no-warnings" ./node_modules/.bin/pkg \
+    NODE_OPTIONS="--no-warnings" PKG_CACHE_PATH=/root/.pkg-cache ./node_modules/.bin/pkg \
     --targets $ARCH_TARGET \
     --output dumbassets \
     --public \
     --public-packages "*" \
     --no-bytecode \
+    --no-native-addons \
     server.js && \
     chmod +x dumbassets && \
     file dumbassets
