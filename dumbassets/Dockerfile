@@ -2,18 +2,18 @@ ARG BUILD_FROM=node:20-slim
 ARG SOURCE_REPO
 ARG SOURCE_VERSION
 
-# Builder stage
-FROM --platform=$BUILDPLATFORM ${BUILD_FROM} AS builder
+# Nix builder stage
+FROM --platform=$BUILDPLATFORM nixos/nix:2.19.2 AS nix-builder
 
 ARG TARGETARCH
 ARG SOURCE_REPO
 ARG SOURCE_VERSION
 
-# Install Nix
-RUN sh <(curl -L https://nixos.org/nix/install) --no-daemon
-
-# Add Nix to PATH
-ENV PATH="/root/.nix-profile/bin:${PATH}"
+# Create a nix configuration
+COPY <<EOF /etc/nix/nix.conf
+sandbox = false
+experimental-features = nix-command flakes
+EOF
 
 # Install dependencies using Nix
 RUN nix-env -iA \
@@ -72,7 +72,7 @@ ENV ADDON_REPO=${SOURCE_REPO}
 ENV LANG=C.UTF-8
 ENV PORT=3000
 
-COPY --from=builder /app/dumbassets /app/dumbassets
+COPY --from=nix-builder /app/dumbassets /app/dumbassets
 COPY rootfs/app .
 
 RUN chmod +x /app/dumbassets && \
