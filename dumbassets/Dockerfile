@@ -3,7 +3,7 @@ ARG SOURCE_REPO
 ARG SOURCE_VERSION
 
 # Builder stage with multi-architecture support
-FROM --platform=$BUILDPLATFORM node:20-slim as builder
+FROM --platform=$BUILDPLATFORM ubuntu:22.04 as builder
 
 # Declare build arguments for platform detection
 ARG TARGETPLATFORM
@@ -27,41 +27,76 @@ ARG SOURCE_VERSION
 RUN : "${SOURCE_REPO:?SOURCE_REPO is not set}" \
     && : "${SOURCE_VERSION:?SOURCE_VERSION is not set}"
 
-# Try to install Bun, fallback to Node.js if not available
+# Install Bun based on architecture
 RUN case "${TARGETARCH}" in \
     amd64) BUN_ARCH="x64" ;; \
     arm64) BUN_ARCH="aarch64" ;; \
-    *) echo "Architecture ${TARGETARCH} not supported by Bun, will use Node.js" && exit 0 ;; \
+    *) echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
     esac && \
-    echo "Attempting to install Bun for ${TARGETARCH} (${BUN_ARCH})" && \
-    (curl -fsSL "https://github.com/oven-sh/bun/releases/latest/download/bun-linux-${BUN_ARCH}.zip" -o bun.zip && \
-     unzip bun.zip && \
-     mv bun-linux-${BUN_ARCH}/bun/bun /usr/local/bin/bun && \
-     chmod +x /usr/local/bin/bun && \
-     rm -rf bun.zip bun-linux-${BUN_ARCH} && \
-     echo "Bun installed successfully" && \
-     bun --version) || \
-    (echo "Bun installation failed, will use Node.js" && rm -f /usr/local/bin/bun)
+    echo "Installing Bun for ${TARGETARCH} (${BUN_ARCH})" && \
+    curl -fsSL "https://github.com/oven-sh/bun/releases/latest/download/bun-linux-${BUN_ARCH}.zip" -o bun.zip && \
+    unzip bun.zip && \
+    mv bun-linux-${BUN_ARCH}/bun/bun /usr/local/bin/bun && \
+    chmod +x /usr/local/bin/bun && \
+    rm -rf bun.zip bun-linux-${BUN_ARCH} && \
+    bun --version
 
-# Download the release tarball
-RUN curl -s "https://api.github.com/repos/${SOURCE_REPO}/releases" | \
-    jq -r --arg version "${SOURCE_VERSION}" '.[] | select(.tag_name == $version) | .tarball_url' | \
-    xargs -I {} curl -L -o source.tar.gz {}
+# Download the release tarball with fallback methods
+RUN echo "Attempting to download ${SOURCE_REPO} version ${SOURCE_VERSION}" && \
+    # Method 1: Try API approach first
+    (curl -s "https://api.github.com/repos/${SOURCE_REPO}/releases" > releases.json && \
+     TARBALL_URL=$(cat releases.json | jq -r --arg version "${SOURCE_VERSION}" '.[] | select(.tag_name == $version) | .tarball_url') && \
+     if [ -n "${TARBALL_URL}" ] && [ "${TARBALL_URL}" != "null" ]; then \
+         echo "Found via API: ${TARBALL_URL}" && \
+         curl -L -o source.tar.gz "${TARBALL_URL}"; \
+     else \
+         echo "API method failed or version not found"; \
+         false; \
+     fi) || \
+    # Method 2: Try direct GitHub tarball URL
+    (echo "Trying direct GitHub URL method..." && \
+     DIRECT_URL="https://github.com/${SOURCE_REPO}/archive/refs/tags/${SOURCE_VERSION}.tar.gz" && \
+     echo "Attempting: ${DIRECT_URL}" && \
+     curl -L -o source.tar.gz "${DIRECT_URL}" && \
+     # Check if we got a valid tarball (not a 404 page)
+     if file source.tar.gz | grep -q "gzip compressed"; then \
+         echo "Successfully downloaded via direct URL"; \
+     else \
+         echo "Direct URL download failed or returned invalid file" && \
+         rm -f source.tar.gz && \
+         false; \
+     fi) || \
+    # Method 3: List available releases and exit with error
+    (echo "All download methods failed. Available releases:" && \
+     if [ -f releases.json ]; then \
+         cat releases.json | jq -r '.[].tag_name' | head -10; \
+     else \
+         curl -s "https://api.github.com/repos/${SOURCE_REPO}/releases" | jq -r '.[].tag_name' | head -10; \
+     fi && \
+     exit 1) && \
+    # Verify file was downloaded
+    if [ ! -f source.tar.gz ]; then \
+        echo "Error: source.tar.gz was not created!" && \
+        exit 1; \
+    fi && \
+    echo "Download successful. File size:" && \
+    ls -lh source.tar.gz && \
+    rm -f releases.json
 
 # Extract the tarball
-RUN tar -xzvf source.tar.gz --strip-components=1 && rm source.tar.gz
+RUN if [ ! -f source.tar.gz ]; then \
+        echo "Error: source.tar.gz not found!" && \
+        ls -la && \
+        exit 1; \
+    fi && \
+    echo "Extracting tarball..." && \
+    tar -xzvf source.tar.gz --strip-components=1 && \
+    rm source.tar.gz
 
-# Install and build using bun or npm
+# Install and build using bun
 COPY app/ .
-RUN if command -v bun >/dev/null 2>&1; then \
-        echo "Using Bun for build" && \
-        bun install --production && \
-        bun build server.js --compile --outfile dumbassets; \
-    else \
-        echo "Using Node.js for build" && \
-        npm ci --production && \
-        npx pkg server.js --targets node18-linux-${TARGETARCH} --output dumbassets; \
-    fi
+RUN bun install --production && \
+    bun build server.js --compile --outfile dumbassets
 
 # Runtime stage using dynamic base image
 FROM ${BUILD_FROM}
