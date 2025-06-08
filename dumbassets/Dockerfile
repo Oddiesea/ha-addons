@@ -3,7 +3,7 @@ ARG SOURCE_REPO
 ARG SOURCE_VERSION
 
 # Builder stage
-FROM ${BUILD_FROM} AS builder
+FROM --platform=$BUILDPLATFORM ${BUILD_FROM} AS builder
 
 ARG TARGETARCH
 ARG SOURCE_REPO
@@ -48,7 +48,7 @@ RUN ARCH_TARGET="node20-linux-x64"; \
     file dumbassets
 
 # Final stage
-FROM ${BUILD_FROM}
+FROM --platform=$TARGETPLATFORM ${BUILD_FROM}
 
 ARG BUILD_FROM
 ARG SOURCE_VERSION
