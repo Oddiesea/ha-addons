@@ -51,11 +51,12 @@ RUN npm i --omit=dev && \
 
 # Create a build script
 RUN echo 'const { build } = require("esbuild"); \
+    const target = process.env.TARGETARCH === "arm64" ? "node20-linux-arm64" : "node20-linux-x64"; \
     build({ \
       entryPoints: ["server.js"], \
       bundle: true, \
       platform: "node", \
-      target: "node20", \
+      target: target, \
       outfile: "dumbassets", \
       format: "cjs", \
       minify: true, \
@@ -66,7 +67,7 @@ RUN echo 'const { build } = require("esbuild"); \
     }).catch(() => process.exit(1));' > build.js
 
 # Build the binary
-RUN node build.js && \
+RUN TARGETARCH=${TARGETARCH} node build.js && \
     chmod +x dumbassets && \
     file dumbassets
 
