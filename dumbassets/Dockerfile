@@ -47,12 +47,26 @@ RUN set -eux; \
 
 # Install dependencies and build tools
 RUN npm i --omit=dev && \
-    npm install @vercel/ncc
+    npm install esbuild
+
+# Create a build script
+RUN echo 'const { build } = require("esbuild"); \
+    build({ \
+      entryPoints: ["server.js"], \
+      bundle: true, \
+      platform: "node", \
+      target: "node20", \
+      outfile: "dumbassets", \
+      format: "cjs", \
+      minify: true, \
+      sourcemap: false, \
+      banner: { \
+        js: "#!/usr/bin/env node\n", \
+      }, \
+    }).catch(() => process.exit(1));' > build.js
 
 # Build the binary
-RUN npx ncc build server.js -o dist && \
-    echo '#!/usr/bin/env node' > dumbassets && \
-    cat dist/index.js >> dumbassets && \
+RUN node build.js && \
     chmod +x dumbassets && \
     file dumbassets
 
