@@ -9,7 +9,7 @@ ARG TARGETARCH
 ARG SOURCE_REPO
 ARG SOURCE_VERSION
 
-RUN apt-get update && apt-get install -y \
+RUN apk add --no-cache \
     curl \
     ca-certificates \
     unzip \
@@ -17,8 +17,7 @@ RUN apt-get update && apt-get install -y \
     python3 \
     make \
     g++ \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+    git
 
 WORKDIR /app
 
