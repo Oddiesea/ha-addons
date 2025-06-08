@@ -45,13 +45,17 @@ RUN set -eux; \
       rm -f source.tar.gz; \
     done
 
-# Install dependencies and pkg
+# Install dependencies and specific pkg version
 RUN npm i --omit=dev && \
-    npm install pkg
+    npm install pkg@5.8.1
 
-# Pre-download Node.js binaries for pkg
-RUN mkdir -p /root/.pkg-cache && \
-    if [ "${TARGETARCH}" = "amd64" ]; then \
+# Create minimal environment for pkg
+RUN mkdir -p /lib && \
+    touch /lib/ld-musl-x86_64.so.1 && \
+    mkdir -p /root/.pkg-cache
+
+# Download Node.js binaries for pkg
+RUN if [ "${TARGETARCH}" = "amd64" ]; then \
       curl -sSL https://github.com/vercel/pkg-fetch/releases/download/v3.4/node-v20.5.1-linux-x64 -o /root/.pkg-cache/v3.4-fetched-v20.5.1-linux-x64; \
     elif [ "${TARGETARCH}" = "arm64" ]; then \
       curl -sSL https://github.com/vercel/pkg-fetch/releases/download/v3.4/node-v20.5.1-linux-arm64 -o /root/.pkg-cache/v3.4-fetched-v20.5.1-linux-arm64; \
@@ -68,6 +72,7 @@ RUN ARCH_TARGET="node20-linux-x64"; \
     --public-packages "*" \
     --no-bytecode \
     --no-native-addons \
+    --compress GZip \
     server.js && \
     chmod +x dumbassets && \
     file dumbassets
