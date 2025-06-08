@@ -1,4 +1,4 @@
-ARG BUILD_FROM=node:20-slim
+ARG BUILD_FROM=node:20-bullseye
 ARG SOURCE_REPO
 ARG SOURCE_VERSION
 
@@ -48,6 +48,10 @@ RUN set -eux; \
 # Install dependencies and pkg
 RUN npm i --omit=dev && \
     npm install pkg@5.8.1
+
+# Create necessary directories for pkg
+RUN mkdir -p /lib && \
+    touch /lib/ld-musl-x86_64.so.1
 
 # Create a build script
 RUN echo 'const { execSync } = require("child_process"); \
