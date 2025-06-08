@@ -9,16 +9,29 @@ ARG TARGETARCH
 ARG SOURCE_REPO
 ARG SOURCE_VERSION
 
-RUN apt-get update && apt-get install -y \
-    curl \
-    ca-certificates \
-    unzip \
-    file \
-    python3 \
-    make \
-    g++ \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+# Install dependencies based on architecture
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        apt-get update && apt-get install -y \
+        curl \
+        ca-certificates \
+        unzip \
+        file \
+        python3 \
+        make \
+        g++ \
+        git \
+        && rm -rf /var/lib/apt/lists/*; \
+    else \
+        apk add --no-cache \
+        curl \
+        ca-certificates \
+        unzip \
+        file \
+        python3 \
+        make \
+        g++ \
+        git; \
+    fi
 
 WORKDIR /app
 
