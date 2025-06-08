@@ -1,37 +1,46 @@
+# Stage 1: Build with Bun
+FROM oven/bun:slim as builder
+
+WORKDIR /app
+COPY . .
+
+# Install dependencies & build native binary
+RUN bun install --production && \
+    bun build src/index.ts --compile --outfile dumbassets
+
+
+# Build Final Image
 ARG BUILD_FROM
-ARG SOURCE_REPO
-ARG SOURCE_VERSION
 FROM ${BUILD_FROM}
 
-# Set shell
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+# Build arguments
+ARG SOURCE_VERSION
+ARG SOURCE_REPO
+ARG ADDON_ARCH
 
-# Setup base
-RUN apt-get update && apt-get install -y \
-    nodejs \
-    npm \
-    curl \
-    jq \
-    tar \
- && apt-get clean \
- && rm -rf /var/lib/apt/lists/*
+# Optional labels
+LABEL org.opencontainers.image.source="${SOURCE_REPO}"
+LABEL org.opencontainers.image.version="${SOURCE_VERSION}"
+LABEL org.opencontainers.image.architecture="${ADDON_ARCH}"
 
-# Copy root filesystem
-COPY rootfs /
+# Optional: make available in container
+ENV ADDON_VERSION=${SOURCE_VERSION}
+ENV ADDON_ARCH=${ADDON_ARCH}
+ENV ADDON_REPO=${SOURCE_REPO}
 
-# Set environment variables
-ENV NODE_ENV=production
+# Example build steps
+RUN echo "Building for $ADDON_ARCH version $ADDON_VERSION from $ADDON_REPO"
 
-# Setup data persistence and workdir
-RUN mkdir -p /app && ln -s /data /app/data
-WORKDIR /app
+# Environment setup
+ENV LANG C.UTF-8
+ENV PORT=3000
 
-# Download and extract the application from GitHub release
-RUN curl -L "https://github.com/${SOURCE_REPO}/archive/refs/tags/${SOURCE_VERSION}.tar.gz" \
-    | tar -xz --strip-components=1 -C /app
+# Copy precompiled binary and runtime files
+COPY --from=builder /app/dumbassets /app/dumbassets
+COPY rootfs/ /
 
-# Set permissions
-RUN chmod a+x /app/run.sh
+# Make the binary executable
+RUN chmod +x /app/dumbassets
 
-# Set entrypoint
-ENTRYPOINT [ "/app/run.sh" ]
+# Run the compiled app via startup script
+CMD [ "/run.sh" ]

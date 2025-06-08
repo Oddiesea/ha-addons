@@ -151,6 +151,22 @@ jobs:
           echo "Generated versions.json:"
           cat versions.json
 
+      - name: Translate architecture
+        id: arch-map
+        run: |
+          case "${{ matrix.arch }}" in
+            amd64)
+              echo "platform_arch=amd64" >> $GITHUB_OUTPUT
+              ;;
+            aarch64)
+              echo "platform_arch=arm64" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "Unsupported architecture: ${{ matrix.arch }}"
+              exit 1
+              ;;
+          esac
+
       - name: Build and push
         run: |
           # Check if versions.json has content
@@ -190,13 +206,14 @@ jobs:
               # Build the image
               echo "  Building image..."
               podman build \
-                --platform linux/${{ matrix.arch }} \
-                --build-arg BUILD_FROM=homeassistant/${{ matrix.arch }}-base:latest \
-                --build-arg SOURCE_VERSION="$version" \
-                --build-arg SOURCE_REPO="$repo" \
-                -t "${image_name}:latest" \
-                -t "${image_name}:${version}" \
-                "./$addon" || {
+              --platform linux/${{ steps.arch-map.outputs.platform_arch }} \
+              --build-arg BUILD_FROM=homeassistant/${{ matrix.arch }}-base:latest \
+              --build-arg SOURCE_VERSION="$version" \
+              --build-arg SOURCE_REPO="$repo" \
+              --build-arg ADDON_ARCH=${{ matrix.arch }} \
+              -t "${image_name}:latest" \
+              -t "${image_name}:${version}" \
+              "./$addon" || {
                 echo "  Error: Failed to build image for $addon"
                 continue
               }
