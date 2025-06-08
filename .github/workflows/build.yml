@@ -32,12 +32,11 @@ jobs:
         with:
           version: latest
 
-      - name: Login to GitHub Container Registry
-        uses: redhat-actions/podman-login@v1
+      - uses: redhat-actions/podman-login@v1
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Find changed add-ons
         id: changed-addons
