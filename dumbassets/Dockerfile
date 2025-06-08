@@ -10,10 +10,9 @@ ARG SOURCE_REPO
 ARG SOURCE_VERSION
 
 # Create a nix configuration
-COPY <<EOF /etc/nix/nix.conf
-sandbox = false
-experimental-features = nix-command flakes
-EOF
+RUN mkdir -p /etc/nix && \
+    echo "sandbox = false" > /etc/nix/nix.conf && \
+    echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf
 
 # Install dependencies using Nix
 RUN nix-env -iA \
