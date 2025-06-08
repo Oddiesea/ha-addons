@@ -47,10 +47,17 @@ RUN set -eux; \
 RUN npm ci --omit=dev && \
     npm install pkg
 
+# Set up pkg compilation
 RUN ARCH_TARGET="node20-linux-x64"; \
     [ "${TARGETARCH}" = "arm64" ] && ARCH_TARGET="node20-linux-arm64"; \
     [ "${TARGETARCH}" = "arm" ] && ARCH_TARGET="node20-linux-armv7"; \
-    ./node_modules/.bin/pkg server.js --targets $ARCH_TARGET --output dumbassets && \
+    NODE_OPTIONS="--no-warnings" ./node_modules/.bin/pkg \
+    --targets $ARCH_TARGET \
+    --output dumbassets \
+    --public \
+    --public-packages "*" \
+    --no-bytecode \
+    server.js && \
     chmod +x dumbassets && \
     file dumbassets
 
