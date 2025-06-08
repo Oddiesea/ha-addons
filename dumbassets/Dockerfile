@@ -45,35 +45,16 @@ RUN set -eux; \
       rm -f source.tar.gz; \
     done
 
-# Install dependencies and specific pkg version
+# Install dependencies and nexe
 RUN npm i --omit=dev && \
-    npm install pkg@5.8.1
+    npm install -g nexe
 
-# Create minimal environment for pkg
-RUN mkdir -p /lib && \
-    touch /lib/ld-musl-x86_64.so.1 && \
-    mkdir -p /root/.pkg-cache
-
-# Download Node.js binaries for pkg
+# Build the binary
 RUN if [ "${TARGETARCH}" = "amd64" ]; then \
-      curl -sSL https://github.com/vercel/pkg-fetch/releases/download/v3.4/node-v20.5.1-linux-x64 -o /root/.pkg-cache/v3.4-fetched-v20.5.1-linux-x64; \
+      nexe server.js -o dumbassets --target "linux-x64-20.5.1"; \
     elif [ "${TARGETARCH}" = "arm64" ]; then \
-      curl -sSL https://github.com/vercel/pkg-fetch/releases/download/v3.4/node-v20.5.1-linux-arm64 -o /root/.pkg-cache/v3.4-fetched-v20.5.1-linux-arm64; \
-    fi
-
-# Set up pkg compilation
-RUN ARCH_TARGET="node20-linux-x64"; \
-    [ "${TARGETARCH}" = "arm64" ] && ARCH_TARGET="node20-linux-arm64"; \
-    [ "${TARGETARCH}" = "arm" ] && ARCH_TARGET="node20-linux-armv7"; \
-    NODE_OPTIONS="--no-warnings" PKG_CACHE_PATH=/root/.pkg-cache ./node_modules/.bin/pkg \
-    --targets $ARCH_TARGET \
-    --output dumbassets \
-    --public \
-    --public-packages "*" \
-    --no-bytecode \
-    --no-native-addons \
-    --compress GZip \
-    server.js && \
+      nexe server.js -o dumbassets --target "linux-arm64-20.5.1"; \
+    fi && \
     chmod +x dumbassets && \
     file dumbassets
 
