@@ -51,7 +51,7 @@ RUN npm i --omit=dev && \
 
 # Create a build script
 RUN echo 'const { build } = require("esbuild"); \
-    const target = process.env.TARGETARCH === "arm64" ? "node20-linux-arm64" : "node20-linux-x64"; \
+    const target = process.env.TARGETARCH === "arm64" ? "node20" : "node20"; \
     build({ \
       entryPoints: ["server.js"], \
       bundle: true, \
