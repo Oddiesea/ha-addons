@@ -101,42 +101,42 @@ jobs:
           echo "TARGET_REPOS=$TARGET_REPOS" >> $GITHUB_ENV
           echo "Target repositories and add-ons: $TARGET_REPOS"
 
-      - name: Trigger builds on target repositories
+      - name: Trigger builds on current repository
         if: steps.find-repos.outputs.target_repos != ''
         run: |
           VERSION="${{ github.event.inputs.version }}"
           [ -z "$VERSION" ] && VERSION="${{ github.event.release.tag_name }}"
 
           for repo_addon_pair in $TARGET_REPOS; do
-            target_repo=$(echo "$repo_addon_pair" | cut -d':' -f1)
+            source_repo=$(echo "$repo_addon_pair" | cut -d':' -f1)
             addons=$(echo "$repo_addon_pair" | cut -d':' -f2)
 
-            echo "Triggering build on repository: $target_repo for add-ons: $addons"
+            echo "Processing source repo: $source_repo with add-ons: $addons"
 
             IFS=',' read -ra ADDON_ARRAY <<< "$addons"
             for addon in "${ADDON_ARRAY[@]}"; do
               if [ -n "$addon" ]; then
                 echo "  - Triggering build for add-on: $addon"
+
                 response=$(curl -s -w "%{http_code}" -X POST \
-                  -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+                  -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                   -H "Accept: application/vnd.github.v3+json" \
                   -H "Content-Type: application/json" \
-                  "https://api.github.com/repos/$target_repo/dispatches" \
+                  "https://api.github.com/repos/oddiesea/ha-addons/dispatches" \
                   -d '{
                     "event_type": "addon_release",
                     "client_payload": {
                       "addon": "'"$addon"'",
                       "version": "'"$VERSION"'",
-                      "source_repo": "${{ github.repository }}",
-                      "trigger_repo": "'"$target_repo"'"
+                      "source_repo": "'"$source_repo"'"
                     }
                   }')
 
                 http_code=$(echo "$response" | tail -c 4)
                 if [ "$http_code" = "204" ]; then
-                  echo "    ✓ Successfully triggered build for $addon on $target_repo"
+                  echo "    ✓ Successfully triggered build for $addon from $source_repo"
                 else
-                  echo "    ✗ Failed to trigger build for $addon on $target_repo (HTTP: $http_code)"
+                  echo "    ✗ Failed to trigger build for $addon from $source_repo (HTTP: $http_code)"
                   echo "    Response: $(echo "$response" | head -c -4)"
                 fi
               fi
